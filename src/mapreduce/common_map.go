@@ -1,7 +1,11 @@
 package mapreduce
 
 import (
+	"encoding/json"
 	"hash/fnv"
+	"io"
+	"log"
+	"os"
 )
 
 func doMap(
@@ -53,6 +57,59 @@ func doMap(
 	//
 	// Your code here (Part I).
 	//
+
+	//First, read the file contents in to a string
+	f1, err := os.Open(inFile)
+	if err != nil {
+		log.Fatal("can not open file", err)
+	}
+	defer f1.Close()
+	var fileContents string
+	var res []byte
+	buf := make([]byte, 100)
+	for {
+		n, err := f1.Read(buf[0:])
+		res = append(res, buf[0:n]...)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.Fatal("Read error", err)
+		}
+	}
+	fileContents = string(res)
+
+	//Second, call mapF function ang get the k/v slice
+	kvslices := mapF(inFile, fileContents)
+
+	//Encode the kv struct to the json temp files
+	//Create nReduce fils to write and pass file pointer to create json encoders
+	var files []*os.File
+	var encs []*json.Encoder
+	for r := 0; r < nReduce; r++ {
+		filename := reduceName(jobName, mapTask, r)
+		tempf, err := os.Create(filename)
+		if err != nil {
+			log.Fatal("can not create file", err)
+		}
+		files = append(files, tempf)
+		encs = append(encs, json.NewEncoder(tempf))
+	}
+
+	//Encode kv pairs to its corresponding intermeidate files
+	for _, kv := range kvslices {
+		rnum := ihash(kv.Key) % nReduce
+		err := encs[rnum].Encode(&kv)
+		if err != nil {
+			log.Fatal("Encoding error", err)
+		}
+	}
+
+	//Close all file pointers
+	for _, tempf := range files {
+		tempf.Close()
+	}
+
 }
 
 func ihash(s string) int {

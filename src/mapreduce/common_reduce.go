@@ -1,5 +1,26 @@
 package mapreduce
 
+import (
+	"encoding/json"
+	"log"
+	"os"
+	"sort"
+)
+
+type kvs []KeyValue
+
+func (kv kvs) Len() int {
+	return len(kv)
+}
+
+func (kv kvs) Swap(i, j int) {
+	kv[i], kv[j] = kv[j], kv[i]
+}
+
+func (kv kvs) Less(i, j int) bool {
+	return kv[i].Key < kv[j].Key
+}
+
 func doReduce(
 	jobName string, // the name of the whole MapReduce job
 	reduceTask int, // which reduce task this is
@@ -44,4 +65,74 @@ func doReduce(
 	//
 	// Your code here (Part I).
 	//
+
+	//First, Read the corresponding files in and decode it to kv slice
+	var filenames []string
+	var files []*os.File
+	var decs []*json.Decoder
+
+	//Create file pointers and decoders
+	for m := 0; m < nMap; m++ {
+		filenames = append(filenames, reduceName(jobName, m, reduceTask))
+		tempf, err := os.Open(filenames[m])
+		if err != nil {
+			log.Fatal("can not read the intermediate files", err)
+		}
+		files = append(files, tempf)
+		dec := json.NewDecoder(tempf)
+		decs = append(decs, dec)
+	}
+
+	//Decode kv values from the files
+	var kvslice []KeyValue
+	for _, dec := range decs {
+		for dec.More() {
+			var tempkv KeyValue
+			err := dec.Decode(&tempkv)
+			if err != nil {
+				log.Fatal("decode error", err)
+			}
+			kvslice = append(kvslice, tempkv)
+		}
+	}
+
+	//Close all file pointers
+	for _, tempf := range files {
+		tempf.Close()
+	}
+
+	//Sort the kvslice by the keys.
+	//Define the needed sort.Interface(Len, Swap, Less) first.
+	sort.Sort(kvs(kvslice))
+
+	//Group kvslice to (k, list(v)) form
+	//Be careful here!
+	//Use var kvmap map[string][]string will generate nil map
+	//So, here we should use make to generate an empty map
+	kvmap := make(map[string][]string)
+	for _, kv := range kvslice {
+		kvmap[kv.Key] = append(kvmap[kv.Key], kv.Value)
+	}
+
+	//Call the reduce function and get the fnail k/v result
+	var finalkv []KeyValue
+	for k, v := range kvmap {
+		value := reduceF(k, v)
+		finalkv = append(finalkv, KeyValue{k, value})
+	}
+
+	//Encode the final result to the file
+	f, err := os.Create(outFile)
+	if err != nil {
+		log.Fatal("can not create the output file")
+	}
+
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, kv := range finalkv {
+		err := enc.Encode(&kv)
+		if err != nil {
+			log.Fatal("encode error", err)
+		}
+	}
 }
